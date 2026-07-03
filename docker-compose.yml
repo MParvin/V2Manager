@@ -1,0 +1,35 @@
+services:
+  xray:
+    image: teddysun/xray:26.6.1
+    container_name: xray
+    network_mode: host
+    volumes:
+      - ./config.json:/etc/xray/config.json
+    restart: unless-stopped
+
+  app:
+    build: .
+    container_name: xray-manager
+    ports:
+      - "65000:5000"
+    volumes:
+      - ./configs:/app/configs
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      - xray
+    networks:
+      - devmad
+    restart: unless-stopped
+    environment:
+      - PYTHONUNBUFFERED=1
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.proxy_manager.rule=Host(`pmanager.devmad.ir`)"
+      - "traefik.http.routers.proxy_manager.entrypoints=websecure"
+      - "traefik.http.routers.proxy_manager.tls=true"
+      - "traefik.http.routers.proxy_manager.service=proxy_manager"
+      - "traefik.http.services.proxy_manager.loadbalancer.server.port=5000"
+  
+networks:
+  devmad:
+    external: true

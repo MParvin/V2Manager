@@ -1,0 +1,5 @@
+FROM teddysun/xray:26.6.1
+
+RUN apk add --update curl
+
+CMD ["/usr/bin/xray" "-config" "/etc/xray/config.json"]

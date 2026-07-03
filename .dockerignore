@@ -1,0 +1,36 @@
+# Git
+.git
+.gitignore
+
+# Python local env and caches
+.venv
+venv
+env
+__pycache__
+*.py[cod]
+.pytest_cache
+.mypy_cache
+.ruff_cache
+
+# Runtime configs (mounted as volumes, not baked into image)
+config.json
+configs/
+
+# Compose / alternate Dockerfiles (not used by app image build)
+docker-compose.yml
+Dockerfile_xray
+
+# Docs and dev files
+README.md
+.env
+.env.*
+*.md
+
+# IDE / OS
+.idea
+.vscode
+.DS_Store
+Thumbs.db
+
+# Local backups
+to_be_deleted_configs/

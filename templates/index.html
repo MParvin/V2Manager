@@ -1,0 +1,706 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>XRay Proxy Manager</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;600;700&family=Syne:wght@400;700;800&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #0a0b0d;
+      --surface: #111318;
+      --surface2: #181c24;
+      --border: #1e2430;
+      --border2: #2a3040;
+      --accent: #00e5ff;
+      --accent2: #7b61ff;
+      --green: #00ff88;
+      --yellow: #ffd60a;
+      --red: #ff3b5c;
+      --text: #e8eaf0;
+      --text2: #8892a4;
+      --text3: #4a5568;
+      --mono: 'JetBrains Mono', monospace;
+      --sans: 'Syne', sans-serif;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--mono);
+      font-size: 13px;
+      min-height: 100vh;
+      overflow-x: hidden;
+    }
+
+    /* Grid background */
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background-image:
+        linear-gradient(rgba(0,229,255,0.03) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(0,229,255,0.03) 1px, transparent 1px);
+      background-size: 40px 40px;
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    .app { position: relative; z-index: 1; }
+
+    /* ── Header ── */
+    header {
+      border-bottom: 1px solid var(--border);
+      padding: 20px 32px;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      background: rgba(10,11,13,0.8);
+      backdrop-filter: blur(10px);
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+
+    .logo {
+      font-family: var(--sans);
+      font-size: 20px;
+      font-weight: 800;
+      letter-spacing: -0.5px;
+      color: var(--accent);
+      text-shadow: 0 0 20px rgba(0,229,255,0.4);
+    }
+
+    .logo span { color: var(--text2); font-weight: 400; }
+
+    .header-tag {
+      font-size: 10px;
+      color: var(--text3);
+      border: 1px solid var(--border2);
+      padding: 2px 8px;
+      border-radius: 3px;
+      text-transform: uppercase;
+      letter-spacing: 1.5px;
+    }
+
+    .header-right { margin-left: auto; display: flex; align-items: center; gap: 12px; }
+
+    .status-dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: var(--green);
+      box-shadow: 0 0 8px var(--green);
+      animation: pulse 2s infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+
+    /* ── Layout ── */
+    main {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0;
+      min-height: calc(100vh - 65px);
+    }
+
+    .panel {
+      padding: 28px 32px;
+      border-right: 1px solid var(--border);
+    }
+
+    .panel:last-child { border-right: none; }
+
+    .panel-header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 20px;
+    }
+
+    .panel-title {
+      font-family: var(--sans);
+      font-size: 14px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 2px;
+      color: var(--text2);
+    }
+
+    .panel-count {
+      background: var(--surface2);
+      border: 1px solid var(--border2);
+      padding: 2px 8px;
+      border-radius: 3px;
+      font-size: 11px;
+      color: var(--accent);
+    }
+
+    /* ── Textarea ── */
+    .input-section { display: flex; flex-direction: column; gap: 12px; }
+
+    textarea {
+      width: 100%;
+      height: 260px;
+      background: var(--surface);
+      border: 1px solid var(--border2);
+      border-radius: 6px;
+      color: var(--text);
+      font-family: var(--mono);
+      font-size: 11px;
+      line-height: 1.6;
+      padding: 14px;
+      resize: vertical;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+
+    textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 1px rgba(0,229,255,0.15); }
+    textarea::placeholder { color: var(--text3); }
+
+    /* ── Buttons ── */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      padding: 9px 18px;
+      border-radius: 5px;
+      font-family: var(--mono);
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      border: none;
+      transition: all 0.15s;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+    }
+
+    .btn-primary {
+      background: var(--accent);
+      color: #000;
+    }
+    .btn-primary:hover { background: #33eaff; box-shadow: 0 0 16px rgba(0,229,255,0.4); }
+
+    .btn-secondary {
+      background: transparent;
+      color: var(--text2);
+      border: 1px solid var(--border2);
+    }
+    .btn-secondary:hover { border-color: var(--accent); color: var(--accent); }
+
+    .btn-deploy {
+      background: linear-gradient(135deg, var(--accent2), #5a45cc);
+      color: #fff;
+      width: 100%;
+      justify-content: center;
+      padding: 12px;
+    }
+    .btn-deploy:hover { box-shadow: 0 0 20px rgba(123,97,255,0.4); transform: translateY(-1px); }
+
+    .btn-danger {
+      background: transparent;
+      color: var(--red);
+      border: 1px solid rgba(255,59,92,0.3);
+      padding: 5px 10px;
+      font-size: 10px;
+    }
+    .btn-danger:hover { background: rgba(255,59,92,0.1); border-color: var(--red); }
+
+    .btn-stop {
+      background: transparent;
+      color: var(--yellow);
+      border: 1px solid rgba(255,214,10,0.3);
+      padding: 5px 10px;
+      font-size: 10px;
+    }
+    .btn-stop:hover { background: rgba(255,214,10,0.1); }
+
+    .btn-start {
+      background: transparent;
+      color: var(--green);
+      border: 1px solid rgba(0,255,136,0.3);
+      padding: 5px 10px;
+      font-size: 10px;
+    }
+    .btn-start:hover { background: rgba(0,255,136,0.1); }
+
+    .btn-sm { padding: 5px 12px; font-size: 10px; }
+    .btn:disabled { opacity: 0.4; cursor: not-allowed; transform: none !important; box-shadow: none !important; }
+
+    .btn-row { display: flex; gap: 8px; flex-wrap: wrap; }
+
+    /* ── Proxy Preview Cards ── */
+    .proxies-preview {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      max-height: 240px;
+      overflow-y: auto;
+    }
+
+    .proxy-card {
+      background: var(--surface);
+      border: 1px solid var(--border2);
+      border-radius: 5px;
+      padding: 10px 14px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      animation: slideIn 0.2s ease;
+    }
+
+    @keyframes slideIn {
+      from { opacity: 0; transform: translateY(-4px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .proxy-badge {
+      font-size: 9px;
+      font-weight: 700;
+      padding: 2px 7px;
+      border-radius: 3px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      flex-shrink: 0;
+    }
+
+    .badge-vmess { background: rgba(123,97,255,0.2); color: var(--accent2); border: 1px solid rgba(123,97,255,0.4); }
+    .badge-vless { background: rgba(0,229,255,0.1); color: var(--accent); border: 1px solid rgba(0,229,255,0.3); }
+    .badge-shadowsocks { background: rgba(0,255,136,0.1); color: var(--green); border: 1px solid rgba(0,255,136,0.3); }
+    .badge-trojan { background: rgba(255,214,10,0.1); color: var(--yellow); border: 1px solid rgba(255,214,10,0.3); }
+
+    .proxy-host { color: var(--text); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+    .proxy-port { color: var(--text2); font-size: 11px; }
+
+    .proxy-check {
+      width: 16px; height: 16px;
+      border: 1px solid var(--border2);
+      border-radius: 3px;
+      cursor: pointer;
+      flex-shrink: 0;
+      display: flex; align-items: center; justify-content: center;
+      transition: all 0.15s;
+    }
+
+    .proxy-check.checked { background: var(--accent); border-color: var(--accent); }
+    .proxy-check.checked::after { content: '✓'; font-size: 10px; color: #000; font-weight: 700; }
+
+    /* ── Status Panel ── */
+    .services-list { display: flex; flex-direction: column; gap: 8px; }
+
+    .service-card {
+      background: var(--surface);
+      border: 1px solid var(--border2);
+      border-radius: 6px;
+      padding: 12px 16px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      animation: slideIn 0.3s ease;
+      transition: border-color 0.2s;
+    }
+
+    .service-card:hover { border-color: var(--border2); }
+
+    .service-status-dot {
+      width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+    }
+
+    .status-healthy { background: var(--green); box-shadow: 0 0 6px var(--green); animation: pulse 2s infinite; }
+    .status-running { background: var(--green); box-shadow: 0 0 6px var(--green); }
+    .status-starting { background: var(--yellow); animation: pulse 1s infinite; }
+    .status-unhealthy { background: var(--red); box-shadow: 0 0 6px var(--red); }
+    .status-exited { background: var(--text3); }
+    .status-not_found { background: var(--text3); }
+
+    .service-info { flex: 1; min-width: 0; }
+
+    .service-name {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .service-meta {
+      font-size: 10px;
+      color: var(--text2);
+      margin-top: 2px;
+    }
+
+    .service-port {
+      font-size: 11px;
+      color: var(--accent);
+      font-weight: 600;
+      flex-shrink: 0;
+    }
+
+    .service-actions { display: flex; gap: 5px; flex-shrink: 0; }
+
+    /* ── Empty / Loading states ── */
+    .empty-state {
+      text-align: center;
+      padding: 40px 20px;
+      color: var(--text3);
+    }
+
+    .empty-icon { font-size: 32px; margin-bottom: 10px; opacity: 0.4; }
+
+    .spinner {
+      width: 16px; height: 16px;
+      border: 2px solid transparent;
+      border-top-color: currentColor;
+      border-radius: 50%;
+      animation: spin 0.6s linear infinite;
+      display: inline-block;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Toast ── */
+    .toast-container {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      z-index: 999;
+    }
+
+    .toast {
+      background: var(--surface2);
+      border: 1px solid var(--border2);
+      border-radius: 6px;
+      padding: 12px 16px;
+      font-size: 12px;
+      max-width: 340px;
+      animation: toastIn 0.25s ease;
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+    }
+
+    .toast-success { border-left: 3px solid var(--green); }
+    .toast-error { border-left: 3px solid var(--red); }
+    .toast-info { border-left: 3px solid var(--accent); }
+
+    @keyframes toastIn {
+      from { opacity: 0; transform: translateX(20px); }
+      to { opacity: 1; transform: translateX(0); }
+    }
+
+    /* ── Scrollbar ── */
+    ::-webkit-scrollbar { width: 4px; height: 4px; }
+    ::-webkit-scrollbar-track { background: var(--surface); }
+    ::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 2px; }
+
+    /* ── Divider ── */
+    .divider {
+      border: none;
+      border-top: 1px solid var(--border);
+      margin: 16px 0;
+    }
+
+    .section-label {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 1.5px;
+      color: var(--text3);
+      margin-bottom: 10px;
+    }
+
+    .select-all-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 8px;
+    }
+
+    .parsed-count {
+      font-size: 11px;
+      color: var(--accent);
+    }
+
+    @media (max-width: 900px) {
+      main { grid-template-columns: 1fr; }
+      .panel { border-right: none; border-bottom: 1px solid var(--border); }
+    }
+  </style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <div class="logo">XRay<span>Manager</span></div>
+    <div class="header-tag">v2ray · vless · ss · trojan</div>
+    <div class="header-right">
+      <div class="status-dot"></div>
+      <span style="color:var(--text3);font-size:11px;">docker engine</span>
+    </div>
+  </header>
+
+  <main>
+    <!-- ── Left Panel: Input ── -->
+    <div class="panel">
+      <div class="panel-header">
+        <div class="panel-title">Configuration Input</div>
+      </div>
+
+      <div class="input-section">
+        <textarea id="proxyInput"
+          placeholder="Paste your proxy configuration here...&#10;&#10;Supported: ss://, vmess://, vless://, trojan://&#10;&#10;You can paste entire Telegram messages — the parser will extract all valid proxy URIs automatically."></textarea>
+
+        <div class="btn-row">
+          <button class="btn btn-primary" onclick="parseProxies()">
+            <span>⚡</span> Parse
+          </button>
+          <button class="btn btn-secondary btn-sm" onclick="clearInput()">
+            Clear
+          </button>
+        </div>
+      </div>
+
+      <!-- Parsed proxies preview -->
+      <div id="parsedSection" style="display:none; margin-top:20px;">
+        <hr class="divider">
+        <div class="select-all-row">
+          <div class="section-label">Extracted Proxies</div>
+          <div style="display:flex;align-items:center;gap:10px;">
+            <span class="parsed-count" id="parsedCount">0 found</span>
+            <button class="btn btn-secondary btn-sm" onclick="toggleSelectAll()">Select All</button>
+          </div>
+        </div>
+        <div class="proxies-preview" id="proxiesPreview"></div>
+        <div style="margin-top:14px;">
+          <button class="btn btn-deploy" id="deployBtn" onclick="deploySelected()">
+            <span>🚀</span> Deploy Selected
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Right Panel: Services ── -->
+    <div class="panel">
+      <div class="panel-header">
+        <div class="panel-title">Proxies</div>
+        <div class="panel-count" id="serviceCount">0</div>
+        <div style="margin-left:auto;display:flex;align-items:center;gap:8px;">
+          <span id="xrayStatusDot" class="service-status-dot status-not_found" title="Xray container"></span>
+          <span id="xrayStatusLabel" style="font-size:10px;color:var(--text3)">xray</span>
+          <button class="btn btn-secondary btn-sm" onclick="reloadXray()" title="Send SIGHUP – hot reload config">↺ Reload</button>
+          <button class="btn btn-secondary btn-sm" onclick="loadServices()">⟳ Refresh</button>
+        </div>
+      </div>
+
+      <div class="services-list" id="servicesList">
+        <div class="empty-state">
+          <div class="empty-icon">🛰</div>
+          <div>No services running</div>
+          <div style="font-size:11px;margin-top:6px;color:var(--text3)">Deploy proxies to see them here</div>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<!-- Toasts -->
+<div class="toast-container" id="toastContainer"></div>
+
+<script>
+  let parsedProxies = [];
+  let selectedIds = new Set();
+  let allSelected = false;
+
+  // ── Parse ─────────────────────────────────────────
+  async function parseProxies() {
+    const text = document.getElementById('proxyInput').value.trim();
+    if (!text) return toast('Paste some proxy config first', 'error');
+
+    const res = await fetch('/api/parse', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({text})
+    });
+    const data = await res.json();
+    parsedProxies = data.proxies;
+
+    if (!parsedProxies.length) {
+      toast('No valid proxies found in input', 'error');
+      return;
+    }
+
+    selectedIds = new Set(parsedProxies.map(p => p.id));
+    renderParsed();
+    toast(`Found ${parsedProxies.length} proxy${parsedProxies.length > 1 ? 'ies' : ''}`, 'success');
+  }
+
+  function renderParsed() {
+    const section = document.getElementById('parsedSection');
+    const preview = document.getElementById('proxiesPreview');
+    const count = document.getElementById('parsedCount');
+
+    section.style.display = 'block';
+    count.textContent = `${parsedProxies.length} found`;
+
+    preview.innerHTML = parsedProxies.map(p => `
+      <div class="proxy-card" data-id="${p.id}">
+        <div class="proxy-check ${selectedIds.has(p.id) ? 'checked' : ''}"
+             onclick="toggleSelect('${p.id}', this)"></div>
+        <span class="proxy-badge badge-${p.protocol === 'shadowsocks' ? 'shadowsocks' : p.protocol}">${protoLabel(p.protocol)}</span>
+        <span class="proxy-host">${p.host || '?'}</span>
+        <span class="proxy-port">:${p.port}</span>
+      </div>
+    `).join('');
+  }
+
+  function protoLabel(p) {
+    return {vmess:'VMess',vless:'VLess',shadowsocks:'SS',trojan:'Trojan'}[p] || p;
+  }
+
+  function toggleSelect(id, el) {
+    if (selectedIds.has(id)) { selectedIds.delete(id); el.classList.remove('checked'); }
+    else { selectedIds.add(id); el.classList.add('checked'); }
+  }
+
+  function toggleSelectAll() {
+    allSelected = !allSelected;
+    if (allSelected) {
+      selectedIds = new Set(parsedProxies.map(p => p.id));
+    } else {
+      selectedIds = new Set();
+    }
+    document.querySelectorAll('.proxy-check').forEach((el, i) => {
+      el.classList.toggle('checked', allSelected);
+    });
+  }
+
+  // ── Deploy ────────────────────────────────────────
+  async function deploySelected() {
+    const toDeploy = parsedProxies.filter(p => selectedIds.has(p.id));
+    if (!toDeploy.length) { toast('Select at least one proxy', 'error'); return; }
+
+    const btn = document.getElementById('deployBtn');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span> Deploying...';
+
+    const res = await fetch('/api/deploy', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({proxies: toDeploy})
+    });
+    const data = await res.json();
+
+    const ok = data.results.filter(r => !r.error).length;
+    const fail = data.results.filter(r => r.error).length;
+
+    btn.disabled = false;
+    btn.innerHTML = '<span>🚀</span> Deploy Selected';
+
+    if (ok) toast(`${ok} service${ok>1?'s':''} deployed successfully`, 'success');
+    if (fail) toast(`${fail} service${fail>1?'s':''} failed to deploy`, 'error');
+
+    loadServices();
+  }
+
+  // ── Services ──────────────────────────────────────
+  async function loadServices() {
+    const res = await fetch('/api/services');
+    const data = await res.json();
+    renderServices(data.services);
+    document.getElementById('serviceCount').textContent = data.services.length;
+    // Refresh xray container status indicator
+    const statusRes = await fetch('/api/xray/status');
+    const statusData = await statusRes.json();
+    const dot = document.getElementById('xrayStatusDot');
+    const label = document.getElementById('xrayStatusLabel');
+    dot.className = `service-status-dot status-${statusData.status}`;
+    label.textContent = `xray · ${statusLabel(statusData.status)}`;
+  }
+
+  async function reloadXray() {
+    const res = await fetch('/api/xray/reload', {method: 'POST'});
+    const data = await res.json();
+    if (data.returncode === 0) {
+      toast('Xray config reloaded (SIGHUP sent)', 'success');
+    } else {
+      toast(`Reload failed: ${data.stderr || 'unknown error'}`, 'error');
+    }  }
+
+  function renderServices(services) {
+    const list = document.getElementById('servicesList');
+    if (!services.length) {
+      list.innerHTML = `
+        <div class="empty-state">
+          <div class="empty-icon">🛰</div>
+          <div>No proxies configured</div>
+          <div style="font-size:11px;margin-top:6px;color:var(--text3)">Deploy proxies to see them here</div>
+        </div>`;
+      return;
+    }
+
+    list.innerHTML = services.map(s => `
+      <div class="service-card" id="svc-${s.name}">
+        <div class="service-status-dot status-${s.status}"></div>
+        <div class="service-info">
+          <div class="service-name">
+            <span class="proxy-badge badge-${s.protocol === 'shadowsocks' ? 'shadowsocks' : s.protocol}">${protoLabel(s.protocol)}</span>
+            ${s.remote_host}
+          </div>
+          <div class="service-meta">SOCKS5 :${s.port} · ${statusLabel(s.status)}</div>
+        </div>
+        <div class="service-port">:${s.port}</div>
+        <div class="service-actions">
+          <button class="btn btn-danger" onclick="removeService('${s.name}', this)">✕ Remove</button>
+        </div>
+      </div>
+    `).join('');
+  }
+
+  function statusLabel(s) {
+    return {healthy:'healthy',running:'running',starting:'starting…',unhealthy:'unhealthy',exited:'stopped',not_found:'not found'}[s] || s;
+  }
+
+  async function removeService(name, btn) {
+    if (!confirm(`Remove proxy ${name}?`)) return;
+    btn.disabled = true;
+    btn.textContent = '…';
+    const res = await fetch(`/api/services/${name}`, {method: 'DELETE'});
+    const data = await res.json();
+    if (data.success) {
+      document.getElementById(`svc-${name}`)?.remove();
+      toast(`Proxy removed and Xray config reloaded`, 'info');
+    } else {
+      toast(data.error || 'Failed to remove', 'error');
+    }
+    loadServices();
+  }
+
+  // ── Helpers ───────────────────────────────────────
+  function clearInput() {
+    document.getElementById('proxyInput').value = '';
+    document.getElementById('parsedSection').style.display = 'none';
+    parsedProxies = [];
+    selectedIds = new Set();
+  }
+
+  function toast(msg, type = 'info') {
+    const el = document.createElement('div');
+    el.className = `toast toast-${type}`;
+    const icon = {success:'✓', error:'✗', info:'ℹ'}[type];
+    el.innerHTML = `<span>${icon}</span><span>${msg}</span>`;
+    document.getElementById('toastContainer').appendChild(el);
+    setTimeout(() => el.remove(), 4000);
+  }
+
+  // ── Init ──────────────────────────────────────────
+  loadServices();
+  setInterval(loadServices, 15000);
+</script>
+</body>
+</html>

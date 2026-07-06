@@ -8,6 +8,7 @@ services:
     restart: unless-stopped
 
   app:
+    image: mparvin/v2manager:latest
     build: .
     container_name: xray-manager
     ports:
@@ -22,6 +23,9 @@ services:
     restart: unless-stopped
     environment:
       - PYTHONUNBUFFERED=1
+      - PROXY_CONNECT_HOST=host.docker.internal
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.proxy_manager.rule=Host(`pmanager.devmad.ir`)"
@@ -29,7 +33,7 @@ services:
       - "traefik.http.routers.proxy_manager.tls=true"
       - "traefik.http.routers.proxy_manager.service=proxy_manager"
       - "traefik.http.services.proxy_manager.loadbalancer.server.port=5000"
-  
+
 networks:
   devmad:
     external: true

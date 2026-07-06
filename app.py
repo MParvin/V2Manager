@@ -3,10 +3,14 @@ import json
 import uuid
 import base64
 import http.client
+import os
 import socket
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from urllib.parse import unquote
 
+import requests
 from flask import Flask, render_template, request, jsonify
 
 app = Flask(__name__)
@@ -16,6 +20,10 @@ CONFIG_FILE = CONFIGS_DIR / "config.json"
 XRAY_CONTAINER = "xray"
 PORT_START = 62500
 PORT_END = 62999
+PROXY_CONNECT_HOST = os.environ.get("PROXY_CONNECT_HOST", "127.0.0.1")
+IP_API_URL = "http://ip-api.com/json/?fields=status,country,countryCode,query"
+GEO_CACHE_TTL = 3600
+_geo_cache: dict[int, tuple[float, dict]] = {}
 
 CONFIGS_DIR.mkdir(exist_ok=True)
 
@@ -94,18 +102,18 @@ def parse_vless(uri: str) -> dict | None:
         without_scheme = uri[8:]  # remove vless://
         if "#" in without_scheme:
             without_scheme = without_scheme[:without_scheme.index("#")]
-        
+
         uid_hostport, _, params_str = without_scheme.partition("?")
         uid, _, hostport = uid_hostport.partition("@")
         host, port = hostport.rsplit(":", 1)
-        
+
         params = {}
         if params_str:
             for kv in params_str.split("&"):
                 if "=" in kv:
                     k, v = kv.split("=", 1)
                     params[k] = unquote(v)
-        
+
         return {
             "protocol": "vless",
             "uuid": uid,
@@ -130,18 +138,18 @@ def parse_trojan(uri: str) -> dict | None:
         without_scheme = uri[9:]
         if "#" in without_scheme:
             without_scheme = without_scheme[:without_scheme.index("#")]
-        
+
         password_hostport, _, params_str = without_scheme.partition("?")
         password, _, hostport = password_hostport.partition("@")
         host, port = hostport.rsplit(":", 1)
-        
+
         params = {}
         if params_str:
             for kv in params_str.split("&"):
                 if "=" in kv:
                     k, v = kv.split("=", 1)
                     params[k] = unquote(v)
-        
+
         return {
             "protocol": "trojan",
             "password": unquote(password),
@@ -162,17 +170,17 @@ def extract_proxies(text: str) -> list[dict]:
         "vless": r'vless://[^\s<>"\']+',
         "trojan": r'trojan://[^\s<>"\']+',
     }
-    
+
     proxies = []
     seen_uris = set()
-    
+
     for proto, pattern in patterns.items():
         for match in re.finditer(pattern, text):
             uri = match.group(0).rstrip(")")  # strip trailing paren from markdown links
             if uri in seen_uris:
                 continue
             seen_uris.add(uri)
-            
+
             parsed = None
             if proto == "ss":
                 parsed = parse_ss(uri)
@@ -182,12 +190,12 @@ def extract_proxies(text: str) -> list[dict]:
                 parsed = parse_vless(uri)
             elif proto == "trojan":
                 parsed = parse_trojan(uri)
-            
+
             if parsed:
                 parsed["uri"] = uri
                 parsed["id"] = str(uuid.uuid4())[:8]
                 proxies.append(parsed)
-    
+
     return proxies
 
 
@@ -505,6 +513,73 @@ def list_proxies() -> list[dict]:
     return proxies
 
 
+def country_flag(code: str) -> str:
+    if not code or len(code) != 2:
+        return ""
+    return "".join(chr(0x1F1E6 + ord(c.upper()) - ord("A")) for c in code)
+
+
+def lookup_country_via_proxy(socks_port: int) -> dict:
+    """Resolve exit country by querying ip-api.com through the local SOCKS inbound."""
+    cached = _geo_cache.get(socks_port)
+    if cached and time.time() - cached[0] < GEO_CACHE_TTL:
+        return cached[1]
+
+    proxy_url = f"socks5h://{PROXY_CONNECT_HOST}:{socks_port}"
+    try:
+        resp = requests.get(
+            IP_API_URL,
+            proxies={"http": proxy_url},
+            timeout=(5, 12),
+            headers={"Connection": "close"},
+        )
+        resp.raise_for_status()
+        payload = resp.json()
+    except requests.RequestException as exc:
+        data = {"error": str(exc)}
+        _geo_cache[socks_port] = (time.time(), data)
+        return data
+    except json.JSONDecodeError:
+        data = {"error": "invalid response"}
+        _geo_cache[socks_port] = (time.time(), data)
+        return data
+
+    if payload.get("status") != "success":
+        data = {"error": payload.get("message", "lookup failed")}
+        _geo_cache[socks_port] = (time.time(), data)
+        return data
+
+    code = payload.get("countryCode", "")
+    data = {
+        "country": payload.get("country", ""),
+        "country_code": code,
+        "ip": payload.get("query", ""),
+        "flag": country_flag(code),
+    }
+    _geo_cache[socks_port] = (time.time(), data)
+    return data
+
+
+def lookup_all_proxy_countries(proxies: list[dict]) -> dict[str, dict]:
+    geo: dict[str, dict] = {}
+    if not proxies:
+        return geo
+
+    with ThreadPoolExecutor(max_workers=5) as pool:
+        futures = {
+            pool.submit(lookup_country_via_proxy, p["port"]): p["name"]
+            for p in proxies
+            if p.get("port")
+        }
+        for future in as_completed(futures):
+            name = futures[future]
+            try:
+                geo[name] = future.result()
+            except Exception as exc:
+                geo[name] = {"error": str(exc)}
+    return geo
+
+
 # ─── Routes ──────────────────────────────────────────────────────────────────
 
 @app.route("/")
@@ -534,6 +609,12 @@ def api_deploy():
 @app.route("/api/services", methods=["GET"])
 def api_services():
     return jsonify({"services": list_proxies()})
+
+
+@app.route("/api/services/geo", methods=["GET"])
+def api_services_geo():
+    proxies = list_proxies()
+    return jsonify({"geo": lookup_all_proxy_countries(proxies)})
 
 
 @app.route("/api/services/<proxy_name>", methods=["DELETE"])

@@ -341,6 +341,19 @@
       flex-shrink: 0;
     }
 
+    .country-flag {
+      font-size: 18px;
+      line-height: 1;
+      flex-shrink: 0;
+      min-width: 22px;
+      text-align: center;
+    }
+
+    .country-flag.loading {
+      font-size: 11px;
+      color: var(--text3);
+    }
+
     .service-actions { display: flex; gap: 5px; flex-shrink: 0; }
 
     /* ── Empty / Loading states ── */
@@ -614,6 +627,7 @@
     const data = await res.json();
     renderServices(data.services);
     document.getElementById('serviceCount').textContent = data.services.length;
+    loadGeo(data.services);
     // Refresh xray container status indicator
     const statusRes = await fetch('/api/xray/status');
     const statusData = await statusRes.json();
@@ -646,13 +660,14 @@
 
     list.innerHTML = services.map(s => `
       <div class="service-card" id="svc-${s.name}">
+        <span class="country-flag loading" id="flag-${s.name}" title="Looking up exit country…">⋯</span>
         <div class="service-status-dot status-${s.status}"></div>
         <div class="service-info">
           <div class="service-name">
             <span class="proxy-badge badge-${s.protocol === 'shadowsocks' ? 'shadowsocks' : s.protocol}">${protoLabel(s.protocol)}</span>
             ${s.remote_host}
           </div>
-          <div class="service-meta">SOCKS5 :${s.port} · ${statusLabel(s.status)}</div>
+          <div class="service-meta" id="meta-${s.name}">SOCKS5 :${s.port} · ${statusLabel(s.status)}</div>
         </div>
         <div class="service-port">:${s.port}</div>
         <div class="service-actions">
@@ -660,6 +675,41 @@
         </div>
       </div>
     `).join('');
+  }
+
+  async function loadGeo(services) {
+    if (!services.length) return;
+    try {
+      const res = await fetch('/api/services/geo');
+      const data = await res.json();
+      for (const s of services) {
+        const g = data.geo[s.name];
+        const flagEl = document.getElementById(`flag-${s.name}`);
+        const metaEl = document.getElementById(`meta-${s.name}`);
+        if (!flagEl) continue;
+        if (!g || g.error) {
+          flagEl.textContent = '🌐';
+          flagEl.classList.remove('loading');
+          flagEl.title = g?.error || 'Country lookup failed';
+          continue;
+        }
+        flagEl.textContent = g.flag || '🌐';
+        flagEl.classList.remove('loading');
+        flagEl.title = g.country ? `${g.country} · exit ${g.ip}` : 'Unknown country';
+        if (metaEl && g.country) {
+          metaEl.textContent = `SOCKS5 :${s.port} · ${g.country} · ${statusLabel(s.status)}`;
+        }
+      }
+    } catch {
+      services.forEach(s => {
+        const flagEl = document.getElementById(`flag-${s.name}`);
+        if (flagEl) {
+          flagEl.textContent = '🌐';
+          flagEl.classList.remove('loading');
+          flagEl.title = 'Country lookup failed';
+        }
+      });
+    }
   }
 
   function statusLabel(s) {

@@ -1,2 +1,4 @@
 Flask==2.3.3
 PyYAML==6.0.1
+requests==2.32.3
+PySocks==1.7.1

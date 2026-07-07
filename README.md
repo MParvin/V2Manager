@@ -102,3 +102,9 @@ docker compose restart xray   # full restart (if SIGHUP is not enough)
 | `trojan://` | Trojan with TLS |
 
 All proxies run inside a single `teddysun/xray:26.6.1` container.
+
+
+## Todo
+
+[ ] Add Shadowsocks support
+[ ] Add Tor support

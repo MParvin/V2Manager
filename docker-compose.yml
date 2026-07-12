@@ -12,7 +12,7 @@ services:
     restart: unless-stopped
 
   app:
-    image: mparvin/v2manager:latest
+    image: mparvin/xray-manager:latest
     build: .
     container_name: xray-manager
     ports:

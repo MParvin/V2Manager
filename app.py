@@ -20,6 +20,9 @@ CONFIG_FILE = CONFIGS_DIR / "config.json"
 XRAY_CONTAINER = "xray"
 PORT_START = 62500
 PORT_END = 62999
+BALANCER_PORT = 1080
+BALANCER_INBOUND_TAG = "inbound-all"
+BALANCER_TAG = "balancer-all"
 PROXY_CONNECT_HOST = os.environ.get("PROXY_CONNECT_HOST", "127.0.0.1")
 IP_API_URL = "http://ip-api.com/json/?fields=status,country,countryCode,query"
 GEO_CACHE_TTL = 3600
@@ -270,6 +273,164 @@ def existing_outbound_fingerprints(cfg: dict | None = None) -> set[tuple]:
     return fps
 
 
+def is_proxy_inbound_tag(tag: str) -> bool:
+    return tag.startswith("inbound-") and tag != BALANCER_INBOUND_TAG
+
+
+def proxy_id_from_inbound_tag(tag: str) -> str | None:
+    if not is_proxy_inbound_tag(tag):
+        return None
+    return tag[len("inbound-"):]
+
+
+def proxy_outbound_tags(cfg: dict) -> list[str]:
+    tags: list[str] = []
+    for ib in cfg.get("inbounds", []):
+        proxy_id = proxy_id_from_inbound_tag(ib.get("tag", ""))
+        if proxy_id:
+            tags.append(f"outbound-{proxy_id}")
+    return tags
+
+
+def sync_balancer_config(cfg: dict) -> dict:
+    """Ensure SOCKS :1080 inbound + leastPing balancer + observatory for all proxies."""
+    outbound_tags = proxy_outbound_tags(cfg)
+
+    cfg["inbounds"] = [
+        ib for ib in cfg.get("inbounds", [])
+        if ib.get("tag") != BALANCER_INBOUND_TAG
+    ]
+
+    routing = cfg.setdefault("routing", {"rules": []})
+    routing["rules"] = [
+        r for r in routing.get("rules", [])
+        if r.get("balancerTag") != BALANCER_TAG
+        and BALANCER_INBOUND_TAG not in r.get("inboundTag", [])
+    ]
+    routing.pop("balancers", None)
+    cfg.pop("observatory", None)
+
+    if not outbound_tags:
+        return cfg
+
+    cfg["inbounds"].insert(0, {
+        "tag": BALANCER_INBOUND_TAG,
+        "port": BALANCER_PORT,
+        "listen": "0.0.0.0",
+        "protocol": "socks",
+        "settings": {"auth": "noauth", "udp": True},
+        "sniffing": {"enabled": True, "destOverride": ["http", "tls"]},
+    })
+
+    cfg["observatory"] = {
+        "subjectSelector": outbound_tags,
+        "probeUrl": "https://www.google.com/generate_204",
+        "probeInterval": "10s",
+        "enableConcurrency": True,
+    }
+
+    routing["balancers"] = [{
+        "tag": BALANCER_TAG,
+        "selector": outbound_tags,
+        "strategy": {"type": "leastPing"},
+        "fallbackTag": outbound_tags[0],
+    }]
+
+    routing["rules"].insert(0, {
+        "type": "field",
+        "inboundTag": [BALANCER_INBOUND_TAG],
+        "balancerTag": BALANCER_TAG,
+    })
+
+    return cfg
+
+
+def outbound_to_uri(ob: dict) -> str | None:
+    """Reconstruct a shareable proxy URI from an Xray outbound entry."""
+    proto = ob.get("protocol")
+    if not proto or proto == "freedom":
+        return None
+
+    settings = ob.get("settings", {})
+    stream = ob.get("streamSettings", {})
+
+    if proto == "vless":
+        servers = settings.get("vnext", [])
+        if not servers:
+            return None
+        server = servers[0]
+        users = server.get("users") or [{}]
+        user = users[0]
+        params = {
+            "encryption": user.get("encryption", "none"),
+            "security": stream.get("security", "none"),
+            "type": stream.get("network", "tcp"),
+        }
+        if user.get("flow"):
+            params["flow"] = user["flow"]
+        if stream.get("security") == "reality":
+            reality = stream.get("realitySettings", {})
+            if reality.get("serverName"):
+                params["sni"] = reality["serverName"]
+            if reality.get("fingerprint"):
+                params["fp"] = reality["fingerprint"]
+            if reality.get("publicKey"):
+                params["pbk"] = reality["publicKey"]
+            if reality.get("shortId"):
+                params["sid"] = reality["shortId"]
+        elif stream.get("security") == "tls":
+            tls = stream.get("tlsSettings", {})
+            if tls.get("serverName"):
+                params["sni"] = tls["serverName"]
+            if tls.get("fingerprint"):
+                params["fp"] = tls["fingerprint"]
+        query = "&".join(f"{k}={v}" for k, v in params.items() if v)
+        return f"vless://{user.get('id', '')}@{server.get('address')}:{server.get('port')}?{query}"
+
+    if proto == "vmess":
+        servers = settings.get("vnext", [])
+        if not servers:
+            return None
+        server = servers[0]
+        users = server.get("users") or [{}]
+        user = users[0]
+        payload = {
+            "v": "2",
+            "ps": ob.get("tag", ""),
+            "add": server.get("address", ""),
+            "port": str(server.get("port", "")),
+            "id": user.get("id", ""),
+            "aid": str(user.get("alterId", 0)),
+            "scy": user.get("security", "auto"),
+            "net": stream.get("network", "tcp"),
+            "tls": "tls" if stream.get("security") == "tls" else "",
+        }
+        encoded = base64.b64encode(json.dumps(payload, separators=(",", ":")).encode()).decode()
+        return f"vmess://{encoded}"
+
+    if proto == "shadowsocks":
+        servers = settings.get("servers", [])
+        if not servers:
+            return None
+        server = servers[0]
+        creds = base64.b64encode(
+            f"{server.get('method', '')}:{server.get('password', '')}".encode()
+        ).decode()
+        return f"ss://{creds}@{server.get('address')}:{server.get('port')}"
+
+    if proto == "trojan":
+        servers = settings.get("servers", [])
+        if not servers:
+            return None
+        server = servers[0]
+        tls = stream.get("tlsSettings", {})
+        sni = tls.get("serverName", server.get("address", ""))
+        query = f"?sni={sni}&type={stream.get('network', 'tcp')}"
+        return f"trojan://{server.get('password', '')}@{server.get('address')}:{server.get('port')}{query}"
+
+    return None
+
+
 # ─── Outbound Builder ────────────────────────────────────────────────────────
 
 def build_outbound(proxy: dict, tag: str) -> dict:
@@ -383,6 +544,11 @@ def load_config() -> dict:
 
 def save_config(cfg: dict) -> None:
     CONFIG_FILE.write_text(json.dumps(cfg, indent=2))
+
+
+def persist_config(cfg: dict) -> None:
+    sync_balancer_config(cfg)
+    save_config(cfg)
 
 
 def get_used_ports() -> set[int]:
@@ -514,7 +680,7 @@ def add_proxy(proxy: dict, *, reload: bool = True) -> dict:
         "outboundTag": outbound_tag,
     })
 
-    save_config(cfg)
+    persist_config(cfg)
     reload_result = reload_xray() if reload else {"returncode": 0, "stderr": ""}
 
     return {
@@ -527,11 +693,9 @@ def add_proxy(proxy: dict, *, reload: bool = True) -> dict:
     }
 
 
-def remove_proxy(proxy_id: str) -> dict:
+def _remove_proxy_from_config(cfg: dict, proxy_id: str) -> bool:
     inbound_tag = f"inbound-{proxy_id}"
     outbound_tag = f"outbound-{proxy_id}"
-
-    cfg = load_config()
     before = len(cfg.get("inbounds", []))
 
     cfg["inbounds"] = [ib for ib in cfg.get("inbounds", [])
@@ -544,12 +708,101 @@ def remove_proxy(proxy_id: str) -> dict:
             if r.get("outboundTag") != outbound_tag
         ]
 
-    if len(cfg.get("inbounds", [])) == before:
+    return len(cfg.get("inbounds", [])) < before
+
+
+def remove_proxy(proxy_id: str, *, reload: bool = True) -> dict:
+    cfg = load_config()
+    if not _remove_proxy_from_config(cfg, proxy_id):
         return {"error": "Proxy not found"}
 
-    save_config(cfg)
-    reload_xray()
+    persist_config(cfg)
+    if reload:
+        reload_xray()
     return {"success": True, "removed": proxy_id}
+
+
+def remove_duplicate_proxies() -> dict:
+    cfg = load_config()
+    outbound_map = {ob.get("tag"): ob for ob in cfg.get("outbounds", [])}
+    seen: dict[tuple, str] = {}
+    to_remove: list[str] = []
+
+    for ib in cfg.get("inbounds", []):
+        proxy_id = proxy_id_from_inbound_tag(ib.get("tag", ""))
+        if not proxy_id:
+            continue
+        ob = outbound_map.get(f"outbound-{proxy_id}")
+        if not ob:
+            continue
+        fp = outbound_fingerprint(ob)
+        if fp is None:
+            continue
+        if fp in seen:
+            to_remove.append(proxy_id)
+        else:
+            seen[fp] = proxy_id
+
+    for proxy_id in to_remove:
+        _remove_proxy_from_config(cfg, proxy_id)
+
+    if to_remove:
+        persist_config(cfg)
+        reload_xray()
+
+    return {"removed": to_remove, "count": len(to_remove)}
+
+
+def remove_not_working_proxies() -> dict:
+    proxies = list_proxies()
+    if not proxies:
+        return {"removed": [], "count": 0}
+
+    to_remove: list[str] = []
+    with ThreadPoolExecutor(max_workers=5) as pool:
+        futures = {
+            pool.submit(lookup_country_via_proxy, p["port"]): p["proxy_id"]
+            for p in proxies
+            if p.get("port")
+        }
+        for future in as_completed(futures):
+            proxy_id = futures[future]
+            try:
+                result = future.result()
+            except Exception:
+                to_remove.append(proxy_id)
+                continue
+            if result.get("error"):
+                to_remove.append(proxy_id)
+
+    if not to_remove:
+        return {"removed": [], "count": 0}
+
+    cfg = load_config()
+    for proxy_id in to_remove:
+        _remove_proxy_from_config(cfg, proxy_id)
+    persist_config(cfg)
+    reload_xray()
+    return {"removed": to_remove, "count": len(to_remove)}
+
+
+def export_proxy_uris() -> list[str]:
+    cfg = load_config()
+    outbound_map = {ob.get("tag"): ob for ob in cfg.get("outbounds", [])}
+    uris: list[str] = []
+
+    for ib in cfg.get("inbounds", []):
+        proxy_id = proxy_id_from_inbound_tag(ib.get("tag", ""))
+        if not proxy_id:
+            continue
+        ob = outbound_map.get(f"outbound-{proxy_id}")
+        if not ob:
+            continue
+        uri = outbound_to_uri(ob)
+        if uri:
+            uris.append(uri)
+
+    return uris
 
 
 def get_xray_status() -> str:
@@ -570,9 +823,9 @@ def list_proxies() -> list[dict]:
 
     for ib in cfg.get("inbounds", []):
         tag = ib.get("tag", "")
-        if not tag.startswith("inbound-"):
+        proxy_id = proxy_id_from_inbound_tag(tag)
+        if not proxy_id:
             continue
-        proxy_id = tag[len("inbound-"):]
         ob = outbound_map.get(f"outbound-{proxy_id}", {})
 
         protocol = ob.get("protocol", "unknown")
@@ -699,6 +952,22 @@ def api_services_geo():
     return jsonify({"geo": lookup_all_proxy_countries(proxies)})
 
 
+@app.route("/api/services/remove-duplicates", methods=["POST"])
+def api_remove_duplicates():
+    return jsonify(remove_duplicate_proxies())
+
+
+@app.route("/api/services/remove-not-working", methods=["POST"])
+def api_remove_not_working():
+    return jsonify(remove_not_working_proxies())
+
+
+@app.route("/api/services/export", methods=["GET"])
+def api_export_services():
+    uris = export_proxy_uris()
+    return jsonify({"uris": uris, "text": "\n".join(uris), "count": len(uris)})
+
+
 @app.route("/api/services/<proxy_name>", methods=["DELETE"])
 def api_remove_service(proxy_name):
     proxy_id = proxy_name.removeprefix("proxy-")
@@ -729,6 +998,9 @@ def api_xray_status():
 
 if __name__ == "__main__":
     if not CONFIG_FILE.exists():
-        save_config({k: (list(v) if isinstance(v, list) else dict(v) if isinstance(v, dict) else v)
-                     for k, v in EMPTY_CONFIG.items()})
+        persist_config({k: (list(v) if isinstance(v, list) else dict(v) if isinstance(v, dict) else v)
+                        for k, v in EMPTY_CONFIG.items()})
+    else:
+        persist_config(load_config())
+    reload_xray()
     app.run(debug=True, host="0.0.0.0", port=5000, use_reloader=True)

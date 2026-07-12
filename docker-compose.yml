@@ -4,7 +4,7 @@ services:
     container_name: xray
     network_mode: host
     volumes:
-      - ./config.json:/etc/xray/config.json
+      - ./configs/config.json:/etc/xray/config.json
     restart: unless-stopped
 
   app:

@@ -196,7 +196,78 @@ def extract_proxies(text: str) -> list[dict]:
                 parsed["id"] = str(uuid.uuid4())[:8]
                 proxies.append(parsed)
 
-    return proxies
+    # Drop duplicates that differ only by URI formatting / fragment
+    unique: list[dict] = []
+    seen_fps: set[tuple] = set()
+    for proxy in proxies:
+        fp = proxy_fingerprint(proxy)
+        if fp in seen_fps:
+            continue
+        seen_fps.add(fp)
+        unique.append(proxy)
+    return unique
+
+
+def proxy_fingerprint(proxy: dict) -> tuple:
+    """Identity key for a proxy based on protocol + endpoint + credentials."""
+    proto = proxy.get("protocol", "")
+    host = str(proxy.get("host", "")).lower()
+    try:
+        port = int(proxy.get("port", 0))
+    except (TypeError, ValueError):
+        port = 0
+
+    if proto in ("vmess", "vless"):
+        return (proto, host, port, proxy.get("uuid", ""))
+    if proto == "shadowsocks":
+        return (proto, host, port, proxy.get("method", ""), proxy.get("password", ""))
+    if proto == "trojan":
+        return (proto, host, port, proxy.get("password", ""))
+    return (proto, host, port)
+
+
+def outbound_fingerprint(ob: dict) -> tuple | None:
+    """Identity key derived from an existing Xray outbound entry."""
+    proto = ob.get("protocol")
+    if not proto or proto == "freedom":
+        return None
+
+    settings = ob.get("settings", {})
+    if proto in ("vmess", "vless"):
+        servers = settings.get("vnext", [])
+        if not servers:
+            return None
+        server = servers[0]
+        users = server.get("users") or [{}]
+        return (
+            proto,
+            str(server.get("address", "")).lower(),
+            int(server.get("port", 0) or 0),
+            users[0].get("id", ""),
+        )
+
+    if proto in ("shadowsocks", "trojan"):
+        servers = settings.get("servers", [])
+        if not servers:
+            return None
+        server = servers[0]
+        host = str(server.get("address", "")).lower()
+        port = int(server.get("port", 0) or 0)
+        if proto == "shadowsocks":
+            return (proto, host, port, server.get("method", ""), server.get("password", ""))
+        return (proto, host, port, server.get("password", ""))
+
+    return None
+
+
+def existing_outbound_fingerprints(cfg: dict | None = None) -> set[tuple]:
+    cfg = cfg if cfg is not None else load_config()
+    fps: set[tuple] = set()
+    for ob in cfg.get("outbounds", []):
+        fp = outbound_fingerprint(ob)
+        if fp is not None:
+            fps.add(fp)
+    return fps
 
 
 # ─── Outbound Builder ────────────────────────────────────────────────────────
@@ -391,10 +462,6 @@ def reload_xray() -> dict:
 
 
 def add_proxy(proxy: dict, *, reload: bool = True) -> dict:
-    port = next_free_port()
-    if port is None:
-        return {"error": "No free ports available"}
-
     proxy_id = proxy["id"]
     inbound_tag = f"inbound-{proxy_id}"
     outbound_tag = f"outbound-{proxy_id}"
@@ -404,10 +471,25 @@ def add_proxy(proxy: dict, *, reload: bool = True) -> dict:
         return {"error": f"Unsupported protocol: {proxy.get('protocol')}"}
 
     cfg = load_config()
+    fp = proxy_fingerprint(proxy)
 
-    # Guard against duplicates
+    # Skip if same endpoint+credentials already configured (any proxy id)
+    if fp in existing_outbound_fingerprints(cfg):
+        return {
+            "skipped": True,
+            "reason": "duplicate",
+            "protocol": proxy.get("protocol"),
+            "host": proxy.get("host", ""),
+            "port": proxy.get("port"),
+        }
+
+    # Guard against colliding generated ids
     if any(ib.get("tag") == inbound_tag for ib in cfg.get("inbounds", [])):
         return {"error": "Proxy already exists"}
+
+    port = next_free_port()
+    if port is None:
+        return {"error": "No free ports available"}
 
     cfg["inbounds"].append({
         "tag": inbound_tag,

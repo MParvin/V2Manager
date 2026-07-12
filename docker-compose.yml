@@ -2,9 +2,13 @@ services:
   xray:
     image: teddysun/xray:26.6.1
     container_name: xray
-    network_mode: host
+    ports:
+      - "1080:1080"
+      - "62500-62999:62500-62999"
     volumes:
       - ./configs/config.json:/etc/xray/config.json
+    networks:
+      - devmad
     restart: unless-stopped
 
   app:
@@ -23,9 +27,7 @@ services:
     restart: unless-stopped
     environment:
       - PYTHONUNBUFFERED=1
-      - PROXY_CONNECT_HOST=host.docker.internal
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+      - PROXY_CONNECT_HOST=xray
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.proxy_manager.rule=Host(`pmanager.devmad.ir`)"

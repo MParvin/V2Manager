@@ -1,4 +1,4 @@
-# XRay Proxy Manager
+# Xray Manager
 
 A Flask web app to parse and deploy V2Ray/Xray proxy configurations into a single Xray Docker container using multiple inbounds — one SOCKS5 port per proxy, all within one container.
 
@@ -16,7 +16,9 @@ A Flask web app to parse and deploy V2Ray/Xray proxy configurations into a singl
 docker compose up -d
 ```
 
-Open http://localhost:5000
+Open http://localhost:65000
+
+The app image is published as [`mparvin/xray-manager:latest`](https://hub.docker.com/r/mparvin/xray-manager).
 
 ### Option B — Run Flask directly
 
@@ -29,12 +31,14 @@ docker compose up -d xray
 
 ## Architecture
 
-All proxies share **a single Xray container** (`teddysun/xray:26.6.1`) running with `network_mode: host`.  
+All proxies share **a single Xray container** (`teddysun/xray:26.6.1`).  
 `configs/config.json` holds every proxy as a separate **inbound + outbound pair** connected by a routing rule.
 
 When a proxy is deployed or removed the Flask app:
 1. Updates `configs/config.json` (adds/removes the inbound, outbound, and routing rule)
 2. Sends **SIGHUP** to the Xray process — hot-reloads the config with **zero downtime** for other proxies
+
+A combined SOCKS proxy on **port 1080** routes traffic through all deployed proxies using Xray's **leastPing** balancer and observatory health checks.
 
 ## Features
 
@@ -44,13 +48,19 @@ When a proxy is deployed or removed the Flask app:
   - An inbound entry (SOCKS5, unique port 62500–62999) added to `configs/config.json`
   - A matching outbound + routing rule added in the same file
   - Xray config hot-reloaded via SIGHUP (no container restart)
+- **Combined proxy**: SOCKS5 on port **1080** with leastPing load balancing across all proxies
 - **Status Panel**: Live status of all configured proxies with auto-refresh every 15s
 - **Reload button**: Manually send SIGHUP to hot-reload Xray config
 - **Remove**: Per-proxy removal — updates config and hot-reloads Xray
+- **Bulk actions**: Remove duplicates, remove not-working proxies, export all configs
 
 ## Port Range
 
-Each proxy listens on a unique SOCKS5 port in the range **62500–62999**, bound directly to the host via `network_mode: host`.
+| Port | Purpose |
+|------|---------|
+| `1080` | Combined SOCKS proxy (leastPing across all proxies) |
+| `62500–62999` | Per-proxy SOCKS5 inbounds |
+| `65000` | Xray Manager web UI (Docker Compose default) |
 
 ## Xray Config Structure
 
@@ -92,6 +102,19 @@ docker compose logs xray -f   # follow Xray logs
 docker compose restart xray   # full restart (if SIGHUP is not enough)
 ```
 
+## CI / Docker Hub
+
+Pushes to `main` and version tags (`v*`) build and publish the app image to Docker Hub.
+
+**Repository:** `mparvin/xray-manager`
+
+**Required GitHub secrets:**
+
+| Secret | Value |
+|--------|-------|
+| `DOCKERHUB_USERNAME` | `mparvin` |
+| `DOCKERHUB_TOKEN` | Docker Hub access token |
+
 ## Proxy Protocol Support
 
 | Protocol     | Outbound Config |
@@ -102,9 +125,3 @@ docker compose restart xray   # full restart (if SIGHUP is not enough)
 | `trojan://` | Trojan with TLS |
 
 All proxies run inside a single `teddysun/xray:26.6.1` container.
-
-
-## Todo
-
-[ ] Add Shadowsocks support
-[ ] Add Tor support

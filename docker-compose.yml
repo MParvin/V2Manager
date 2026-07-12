@@ -30,11 +30,11 @@ services:
       - PROXY_CONNECT_HOST=xray
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.proxy_manager.rule=Host(`pmanager.devmad.ir`)"
-      - "traefik.http.routers.proxy_manager.entrypoints=websecure"
-      - "traefik.http.routers.proxy_manager.tls=true"
-      - "traefik.http.routers.proxy_manager.service=proxy_manager"
-      - "traefik.http.services.proxy_manager.loadbalancer.server.port=5000"
+      - "traefik.http.routers.xray_manager.rule=Host(`pmanager.devmad.ir`)"
+      - "traefik.http.routers.xray_manager.entrypoints=websecure"
+      - "traefik.http.routers.xray_manager.tls=true"
+      - "traefik.http.routers.xray_manager.service=xray_manager"
+      - "traefik.http.services.xray_manager.loadbalancer.server.port=5000"
 
 networks:
   devmad:
